@@ -1,0 +1,12 @@
+pydantic
+python-dotenv==1.0.1
+fastapi
+uvicorn
+python-multipart
+httptools
+openvino
+opencv-python
+torch
+torchvision
+scikit-learn
+optimum[openvino]
