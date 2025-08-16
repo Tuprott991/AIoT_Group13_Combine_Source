@@ -4,9 +4,6 @@ from services.paddleocr_services import extract_text
 import logging
 from gtts import gTTS
 import os
-import pygame
-import time
-import tempfile
 
 router = APIRouter()
 
@@ -48,25 +45,12 @@ async def extract_text_endpoint(request: Request):
             tts = gTTS(text=text, lang='en')
             
             # Create temporary file for audio
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-            tts.save(temp_file.name)
-            
-            # Play audio on server only
-            pygame.mixer.init()
-            pygame.mixer.music.load(temp_file.name)
-            pygame.mixer.music.play()
-            
-            # Wait for audio to finish playing (with timeout)
-            timeout = 10  # Maximum 10 seconds
-            start_time = time.time()
-            while pygame.mixer.music.get_busy() and (time.time() - start_time) < timeout:
-                time.sleep(0.1)
+            tts.save("paddleocr_analysis.mp3")
                 
             print(f"✅ Audio played on server: {text}")
-            
-            # Clean up temporary file
-            os.unlink(temp_file.name)
-            
+
+            os.system("start paddleocr_analysis.mp3")
+
         except Exception as audio_error:
             logging.warning(f"Could not play audio on server: {audio_error}")
         
