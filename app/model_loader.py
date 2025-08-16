@@ -13,8 +13,8 @@ from utils.infer_yolic import YOLICOpenVINOInference
 # Global variables to store loaded models
 _models: Dict[str, Any] = {}
 _model_paths = {
-    "yolo_sign_detection": "ai_models/yolov8_sign_detection/yolov8_sign_detection.xml",
-    "yolic_hazard_detection": "ai_models/yolic_m2/yolic_m2.xml",
+    "yolo_sign_detection": "/kaggle/input/system_model/pytorch/default/1/ai_models/yolov8_sign_detection/yolov8_sign_detection.xml",
+    "yolic_hazard_detection": "/kaggle/input/system_model/pytorch/default/1/ai_models/yolic_m2/yolic_m2.xml",
     "smolvlm": "echarlaix/SmolVLM-256M-Instruct-openvino"
 }
 
