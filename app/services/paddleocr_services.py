@@ -5,12 +5,9 @@ import numpy as np
 from PIL import Image
 import io
 
-# Note: This is a placeholder for PaddleOCR functionality
-# You would need to implement the actual PaddleOCR inference here
-
 async def extract_text(image_data: bytes):
     """
-    Extract text from image using PaddleOCR
+    Extract text from image using PaddleOCR PyTorch implementation
     
     Args:
         image_data (bytes): Raw image bytes
@@ -19,6 +16,9 @@ async def extract_text(image_data: bytes):
         dict: OCR results with detected text
     """
     try:
+        # Import the inference function
+        from utils.infer_paddleocr import infer_image_with_preloaded_model
+        
         # Convert bytes to OpenCV image
         np_image = np.frombuffer(image_data, np.uint8)
         image = cv2.imdecode(np_image, cv2.IMREAD_COLOR)
@@ -26,19 +26,10 @@ async def extract_text(image_data: bytes):
         if image is None:
             raise ValueError("Invalid image data")
         
-        # TODO: Implement actual PaddleOCR inference
-        # For now, returning a placeholder response
+        # Run OCR using the preloaded model
+        result = infer_image_with_preloaded_model(image)
         
-        return {
-            "texts": [
-                {
-                    "text": "Sample detected text",
-                    "confidence": 0.95,
-                    "bbox": [[10, 10], [100, 10], [100, 30], [10, 30]]
-                }
-            ],
-            "total_texts": 1
-        }
+        return result
         
     except Exception as e:
         raise ValueError(f"Error extracting text: {str(e)}")

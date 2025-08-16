@@ -8,14 +8,15 @@ import logging
 from typing import Dict, Any, Optional
 from utils.infer_smolvlm import SmolVLMInference
 from utils.infer_yolo import YOLOv8SignDetection
-from utils.infer_yolic import YOLICOpenVINOInference
+from utils.infer_yolic import YOLICPyTorchInference
+from utils.infer_paddleocr import PaddleOCRInference
 
 # Global variables to store loaded models
 _models: Dict[str, Any] = {}
 _model_paths = {
-    "yolo_sign_detection": "/kaggle/input/system_model/pytorch/default/1/ai_models/yolov8_sign_detection/yolov8_sign_detection.xml",
-    "yolic_hazard_detection": "/kaggle/input/system_model/pytorch/default/1/ai_models/yolic_m2/yolic_m2.xml",
-    "smolvlm": "echarlaix/SmolVLM-256M-Instruct-openvino"
+    "yolo_sign_detection": "ai_models/yolov8_sign_detection/yolov8_traffic_sign.pt",
+    "yolic_hazard_detection": "ai_models/yolic_m2/yolic_m2.pth.tar",
+    "smolvlm": "HuggingFaceTB/SmolVLM-256M-Instruct"
 }
 
 logger = logging.getLogger(__name__)
@@ -45,7 +46,7 @@ def load_all_models() -> None:
         # Load YOLIC Hazard Detection Model
         logger.info("Loading YOLIC Hazard Detection model...")
         if os.path.exists(_model_paths["yolic_hazard_detection"]):
-            _models["yolic_hazard_detection"] = YOLICOpenVINOInference(
+            _models["yolic_hazard_detection"] = YOLICPyTorchInference(
                 model_path=_model_paths["yolic_hazard_detection"]
             )
             logger.info("✅ YOLIC Hazard Detection model loaded successfully")
@@ -63,6 +64,15 @@ def load_all_models() -> None:
         
     except Exception as e:
         logger.error(f"❌ Failed to load SmolVLM model: {e}")
+    
+    try:
+        # Load PaddleOCR Model
+        logger.info("Loading PaddleOCR model...")
+        _models["paddleocr"] = PaddleOCRInference()
+        logger.info("✅ PaddleOCR model loaded successfully")
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to load PaddleOCR model: {e}")
     
     logger.info(f"Model loading completed. Loaded {len(_models)} models successfully.")
     
@@ -124,13 +134,15 @@ def reload_model(model_name: str) -> bool:
                 model_path=_model_paths[model_name]
             )
         elif model_name == "yolic_hazard_detection":
-            _models[model_name] = YOLICOpenVINOInference(
+            _models[model_name] = YOLICPyTorchInference(
                 model_path=_model_paths[model_name]
             )
         elif model_name == "smolvlm":
             _models[model_name] = SmolVLMInference(
                 model_id=_model_paths[model_name]
             )
+        elif model_name == "paddleocr":
+            _models[model_name] = PaddleOCRInference()
         else:
             logger.error(f"Unknown model name: {model_name}")
             return False

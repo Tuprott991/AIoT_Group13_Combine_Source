@@ -2,7 +2,8 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
-from openvino.runtime import Core
+import torch
+from ultralytics import YOLO
 import os
 from PIL import Image, ImageDraw, ImageFont
 
@@ -26,159 +27,74 @@ class_names = [
 ]
 
 class YOLOv8SignDetection:
-    def __init__(self, model_path="ai_models/yolov8_sign_detection/yolov8_sign_detection.xml", conf_threshold=0.5, iou_threshold=0.4):
+    def __init__(self, model_path="ai_models/yolov8_sign_detection/yolov8_traffic_sign.pt", conf_threshold=0.5, iou_threshold=0.4):
         """
-        Initialize YOLOv8 sign detection with OpenVINO
+        Initialize YOLOv8 sign detection with PyTorch
         
         Args:
-            model_path (str): Path to the OpenVINO model XML file
+            model_path (str): Path to the PyTorch model file (.pt)
             conf_threshold (float): Confidence threshold for detections
             iou_threshold (float): IoU threshold for NMS
         """
-        self.core = Core()
-        self.model = self.core.read_model(model_path)
-        self.compiled_model = self.core.compile_model(self.model, "CPU")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # Get input and output layers
-        self.input_layer = self.compiled_model.input(0)
-        self.output_layer = self.compiled_model.output(0)
+        # Load the YOLO model
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Model file not found: {model_path}")
         
-        # Get input shape
-        self.input_shape = self.input_layer.shape
-        self.input_height = self.input_shape[2]
-        self.input_width = self.input_shape[3]
+        self.model = YOLO(model_path)
+        self.model.to(self.device)
         
         # Thresholds
         self.conf_threshold = conf_threshold
         self.iou_threshold = iou_threshold
         
         print(f"Model loaded successfully!")
-        print(f"Input shape: {self.input_shape}")
-        print(f"Expected input size: {self.input_width}x{self.input_height}")
+        print(f"Device: {self.device}")
+        print(f"Model path: {model_path}")
         
     def preprocess_image(self, image):
         """
-        Preprocess image for YOLOv8 inference
+        Preprocess image for YOLOv8 inference (handled internally by ultralytics)
         
         Args:
             image: OpenCV image (BGR format)
             
         Returns:
-            tuple: (preprocessed_image, scale_factors)
+            numpy.ndarray: Image ready for inference
         """
-        # Get original image dimensions
-        original_height, original_width = image.shape[:2]
-        
-        # Resize image while maintaining aspect ratio
-        resized_image = cv2.resize(image, (self.input_width, self.input_height))
-        
-        # Convert BGR to RGB
-        rgb_image = cv2.cvtColor(resized_image, cv2.COLOR_BGR2RGB)
-        
-        # Normalize to [0, 1] and change from HWC to CHW format
-        input_image = rgb_image.astype(np.float32) / 255.0
-        input_image = np.transpose(input_image, (2, 0, 1))
-        input_image = np.expand_dims(input_image, axis=0)
-        
-        # Calculate scale factors for coordinate conversion
-        scale_x = original_width / self.input_width
-        scale_y = original_height / self.input_height
-        
-        return input_image, (scale_x, scale_y)
+        # YOLO handles preprocessing internally, just return the image
+        return image
     
-    def postprocess(self, outputs, scale_factors):
+    def postprocess(self, results):
         """
-        Post-process YOLOv8 outputs to extract bounding boxes and classes
+        Post-process YOLOv8 outputs from ultralytics
         
         Args:
-            outputs: Raw model outputs
-            scale_factors: Scale factors for coordinate conversion
+            results: Results from ultralytics YOLO model
             
         Returns:
             list: List of detections with format [x1, y1, x2, y2, confidence, class_id, class_name]
         """
-        scale_x, scale_y = scale_factors
-        
-        # YOLOv8 output format: [batch, 84, 8400] where 84 = 4 coords + 80 classes
-        # But for custom model, it might be [batch, 4+num_classes, detections]
-        predictions = outputs[0]
-        
-        # Handle different output formats
-        if len(predictions.shape) == 3:
-            predictions = predictions[0]  # Remove batch dimension
-            
-        # Transpose if needed (YOLOv8 outputs are usually [84, 8400])
-        if predictions.shape[0] < predictions.shape[1]:
-            predictions = predictions.T  # Now [8400, 84]
-        
         detections = []
         
-        for prediction in predictions:
-            # Extract coordinates and confidence
-            x_center, y_center, width, height = prediction[:4]
-            
-            # Extract class scores (skip first 4 coordinate values)
-            class_scores = prediction[4:]
-            
-            # Get the class with highest score
-            class_id = np.argmax(class_scores)
-            confidence = class_scores[class_id]
-            
-            # Filter by confidence threshold
-            if confidence > self.conf_threshold:
-                # Convert center coordinates to corner coordinates
-                x1 = (x_center - width / 2) * scale_x
-                y1 = (y_center - height / 2) * scale_y
-                x2 = (x_center + width / 2) * scale_x
-                y2 = (y_center + height / 2) * scale_y
-                
-                # Get class name
-                class_name = class_names[class_id] if class_id < len(class_names) else f"Class_{class_id}"
-                
-                detections.append([x1, y1, x2, y2, confidence, class_id, class_name])
-        
-        # Apply Non-Maximum Suppression
-        if detections:
-            detections = self.apply_nms(detections)
+        for result in results:
+            boxes = result.boxes
+            if boxes is not None:
+                for box in boxes:
+                    # Get coordinates, confidence, and class
+                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                    confidence = float(box.conf[0].cpu().numpy())
+                    class_id = int(box.cls[0].cpu().numpy())
+                    
+                    # Filter by confidence threshold
+                    if confidence > self.conf_threshold:
+                        # Get class name
+                        class_name = class_names[class_id] if class_id < len(class_names) else f"Class_{class_id}"
+                        
+                        detections.append([x1, y1, x2, y2, confidence, class_id, class_name])
         
         return detections
-    
-    def apply_nms(self, detections):
-        """
-        Apply Non-Maximum Suppression to remove overlapping detections
-        
-        Args:
-            detections: List of detections
-            
-        Returns:
-            list: Filtered detections after NMS
-        """
-        if not detections:
-            return []
-        
-        # Convert to numpy array for easier manipulation
-        detections = np.array(detections, dtype=object)
-        
-        # Extract coordinates and scores
-        boxes = np.array([det[:4] for det in detections], dtype=np.float32)
-        scores = np.array([det[4] for det in detections], dtype=np.float32)
-        
-        # Apply OpenCV's NMS
-        indices = cv2.dnn.NMSBoxes(
-            boxes.tolist(), 
-            scores.tolist(), 
-            self.conf_threshold, 
-            self.iou_threshold
-        )
-        
-        if len(indices) > 0:
-            # Flatten indices if needed
-            if isinstance(indices[0], (list, np.ndarray)):
-                indices = [i[0] for i in indices]
-            
-            return [detections[i] for i in indices]
-        
-        return []
     
     def get_position(self, x1, x2, image_width):
         """
@@ -210,14 +126,11 @@ class YOLOv8SignDetection:
         Returns:
             list: List of dictionaries containing sign info and position
         """
-        # Preprocess image
-        input_image, scale_factors = self.preprocess_image(image)
-        
-        # Run inference
-        results = self.compiled_model([input_image])
+        # Run inference using ultralytics YOLO
+        results = self.model(image, conf=self.conf_threshold, iou=self.iou_threshold, verbose=False)
         
         # Post-process results
-        detections = self.postprocess(results[self.output_layer], scale_factors)
+        detections = self.postprocess(results)
         
         # Format output
         detected_signs = []
@@ -370,13 +283,13 @@ class YOLOv8SignDetection:
             # If even default font fails, return None and handle in calling code
             return None
 
-def infer_image(image_path, model_path="ai_models/yolov8_sign_detection/yolov8_sign_detection.xml"):
+def infer_image(image_path, model_path="ai_models/yolov8_sign_detection/yolov8_traffic_sign.pt"):
     """
     Convenience function to infer a single image
     
     Args:
         image_path (str): Path to the image file
-        model_path (str): Path to the OpenVINO model
+        model_path (str): Path to the PyTorch model
         
     Returns:
         tuple: (detections, annotated_image)
@@ -430,13 +343,13 @@ def infer_image_with_preloaded_model(image):
     
     return results
 
-def infer_folder(folder_path, model_path="ai_models/yolov8_sign_detection/yolov8_sign_detection.xml", save_results=True):
+def infer_folder(folder_path, model_path="ai_models/yolov8_sign_detection/yolov8_traffic_sign.pt", save_results=True):
     """
     Infer all images in a folder
     
     Args:
         folder_path (str): Path to folder containing images
-        model_path (str): Path to the OpenVINO model
+        model_path (str): Path to the PyTorch model
         save_results (bool): Whether to save annotated images
         
     Returns:
@@ -480,7 +393,7 @@ def infer_folder(folder_path, model_path="ai_models/yolov8_sign_detection/yolov8
 
 if __name__ == "__main__":
     # Example usage
-    model_path = "ai_models/yolov8_sign_detection/yolov8_sign_detection.xml"
+    model_path = "ai_models/yolov8_sign_detection/yolov8_traffic_sign.pt"
     
     # Test with a single image
     if os.path.exists("test_sign4.jpg"):
