@@ -1,8 +1,10 @@
 import cv2
 import numpy as np
 import os
-import openvino as ov
+import torch
+import torch.nn as nn
 from torchvision import transforms
+from torchvision.models import mobilenet_v2
 
 # Constants from original file
 NumCell = 104  # number of cells
@@ -81,23 +83,43 @@ cell_list = [[points_list[0], points_list[11]], [points_list[1], points_list[12]
 class_names = ["Bump", "Column", "Dent", "Fence", "Creature", "Vehicle", "Wall", "Weed", "ZebraCrossing", "TrafficCone",
                "TrafficSign"]
 
-class YOLICOpenVINOInference:
-    def __init__(self, model_path="ai_models/yolic_m2/yolic_m2.xml"):
+class YOLICPyTorchInference:
+    def __init__(self, model_path="ai_models/yolic_m2/yolic_m2.pth.tar"):
         """
-        Initialize OpenVINO inference for YOLIC model
+        Initialize PyTorch inference for YOLIC model
         
         Args:
-            model_path (str): Path to the OpenVINO model XML file
+            model_path (str): Path to the PyTorch model file (.pth.tar)
         """
-        self.core = ov.Core()
-        self.model = self.core.read_model(model_path)
-        self.compiled_model = self.core.compile_model(self.model, "CPU")
-        self.input_layer = self.compiled_model.input(0)
-        self.output_layer = self.compiled_model.output(0)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Initialize model architecture
+        self.model = mobilenet_v2()
+        self.model.classifier[1] = nn.Linear(1280, NumCell * (NumClass + 1))
+        
+        # Load the trained weights
+        if os.path.exists(model_path):
+            checkpoint = torch.load(model_path, map_location=self.device)
+            # Handle different checkpoint formats
+            if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+                self.model.load_state_dict(checkpoint['state_dict'])
+            elif isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+                self.model.load_state_dict(checkpoint['model_state_dict'])
+            else:
+                self.model.load_state_dict(checkpoint)
+        else:
+            raise FileNotFoundError(f"Model file not found: {model_path}")
+        
+        # Set model to evaluation mode
+        self.model.eval()
+        self.model.to(self.device)
         
         # Preprocessing transform
         self.preprocess = transforms.Compose([
+            transforms.ToPILImage(),
+            transforms.Resize((224, 224)),
             transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
     
     def preprocess_image(self, image):
@@ -108,23 +130,17 @@ class YOLICOpenVINOInference:
             image: OpenCV image (BGR format)
             
         Returns:
-            numpy array: Preprocessed image ready for inference
+            torch.Tensor: Preprocessed image ready for inference
         """
-        # Resize image to model input size
-        resized_image = cv2.resize(image, (224, 224))
-        
         # Convert BGR to RGB
-        rgb_image = cv2.cvtColor(resized_image, cv2.COLOR_BGR2RGB)
+        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         
-        # Convert to tensor and normalize
+        # Apply preprocessing transforms
         input_tensor = self.preprocess(rgb_image)
-        input_batch = input_tensor.unsqueeze(0)
+        input_batch = input_tensor.unsqueeze(0).to(self.device)
         
-        return input_batch.numpy()
+        return input_batch
     
-    def sigmoid(self, x):
-        """Apply sigmoid activation"""
-        return 1 / (1 + np.exp(-x))
     
     def get_position(self, center_x, image_width):
         """
@@ -162,10 +178,11 @@ class YOLICOpenVINOInference:
         input_data = self.preprocess_image(image)
         
         # Run inference
-        result = self.compiled_model([input_data])[self.output_layer]
+        with torch.no_grad():
+            result = self.model(input_data)
         
-        # Apply sigmoid activation
-        output = self.sigmoid(result[0])
+        # Convert to numpy and apply sigmoid activation
+        output = torch.sigmoid(result).cpu().numpy()[0]
         
         # Process predictions
         predictions = np.where(output > 0.5, 1, 0)
@@ -227,19 +244,19 @@ class YOLICOpenVINOInference:
         
         return detected_objects
 
-def infer_image(image_path, model_path="ai_models/yolic_m2/yolic_m2.xml"):
+def infer_image(image_path, model_path="ai_models/yolic_m2/yolic_m2.pth.tar"):
     """
     Convenience function to infer a single image
     
     Args:
         image_path (str): Path to the image file
-        model_path (str): Path to the OpenVINO model
+        model_path (str): Path to the PyTorch model
         
     Returns:
         list: List of detected objects with positions
     """
     # Initialize inference
-    yolic_inference = YOLICOpenVINOInference(model_path)
+    yolic_inference = YOLICPyTorchInference(model_path)
     
     # Read image
     image = cv2.imread(image_path)
@@ -282,21 +299,21 @@ def infer_image_with_preloaded_model(image):
             "class_index": detection.get("class_index", -1)
         })
     
-    return results
+    return results  
 
-def infer_folder(folder_path, model_path="ai_models/yolic_m2/yolic_m2.xml"):
+def infer_folder(folder_path, model_path="ai_models/yolic_m2/yolic_m2.pth.tar"):
     """
     Infer all images in a folder
     
     Args:
         folder_path (str): Path to folder containing images
-        model_path (str): Path to the OpenVINO model
+        model_path (str): Path to the PyTorch model
         
     Returns:
         dict: Dictionary with filename as key and detections as value
     """
     # Initialize inference
-    yolic_inference = YOLICOpenVINOInference(model_path)
+    yolic_inference = YOLICPyTorchInference(model_path)
     
     results = {}
     
@@ -322,7 +339,7 @@ def infer_folder(folder_path, model_path="ai_models/yolic_m2/yolic_m2.xml"):
 
 # if __name__ == "__main__":
 #     # Example usage
-#     model_path = "ai_models/yolic_m2/yolic_m2.xml"
+#     model_path = "ai_models/yolic_m2/yolic_m2.pth.tar"
     
 #     # Test with a single image
 #     if os.path.exists("test_img4.jpg"):

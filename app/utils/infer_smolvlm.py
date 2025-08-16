@@ -1,40 +1,76 @@
-from optimum.intel import OVModelForVisualCausalLM
-from transformers import AutoTokenizer, AutoProcessor
+from transformers import AutoTokenizer, AutoProcessor, LlavaForConditionalGeneration
 from PIL import Image
 import torch
 import os
 import time
 
 class SmolVLMInference:
-    def __init__(self, model_id="echarlaix/SmolVLM-256M-Instruct-openvino"):
+    def __init__(self, model_id="HuggingFaceTB/SmolVLM-256M-Instruct"):
         """
-        Initialize SmolVLM model for visual question answering
+        Initialize SmolVLM model for visual question answering using PyTorch
         
         Args:
-            model_id (str): HuggingFace model ID for SmolVLM OpenVINO model
+            model_id (str): HuggingFace model ID for SmolVLM PyTorch model
         """
-        print("Loading SmolVLM model...")
+        print("Loading SmolVLM model with PyTorch...")
+        
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Using device: {self.device}")
+        
         try:
-            self.model = OVModelForVisualCausalLM.from_pretrained(model_id)
+            # Load model, tokenizer, and processor
+            self.model = LlavaForConditionalGeneration.from_pretrained(
+                model_id,
+                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+                device_map="auto" if torch.cuda.is_available() else None,
+                low_cpu_mem_usage=True
+            )
+            
             self.tokenizer = AutoTokenizer.from_pretrained(model_id)
             self.processor = AutoProcessor.from_pretrained(model_id)
             
             # Set pad_token if not set
             if self.tokenizer.pad_token is None:
                 self.tokenizer.pad_token = self.tokenizer.eos_token
-                
-            print("SmolVLM model loaded successfully!")
-            # print(f"Model type: {type(self.model)}")
-            # print(f"Tokenizer type: {type(self.tokenizer)}")
-            # print(f"Processor type: {type(self.processor)}")
+            
+            # Move model to device if not using device_map
+            if not torch.cuda.is_available():
+                self.model.to(self.device)
+            
+            self.model.eval()
+            
+            print("✅ SmolVLM model loaded successfully!")
+            print(f"Model device: {next(self.model.parameters()).device}")
             
         except Exception as e:
-            print(f"Error loading model: {e}")
-            raise
+            print(f"❌ Error loading model: {e}")
+            # Fallback to a simpler model if SmolVLM is not available
+            try:
+                print("Trying fallback model...")
+                self.model = LlavaForConditionalGeneration.from_pretrained(
+                    "llava-hf/llava-1.5-7b-hf",
+                    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+                    device_map="auto" if torch.cuda.is_available() else None,
+                    low_cpu_mem_usage=True
+                )
+                self.tokenizer = AutoTokenizer.from_pretrained("llava-hf/llava-1.5-7b-hf")
+                self.processor = AutoProcessor.from_pretrained("llava-hf/llava-1.5-7b-hf")
+                
+                if self.tokenizer.pad_token is None:
+                    self.tokenizer.pad_token = self.tokenizer.eos_token
+                
+                if not torch.cuda.is_available():
+                    self.model.to(self.device)
+                
+                self.model.eval()
+                print("✅ Fallback model loaded successfully!")
+            except Exception as e2:
+                print(f"❌ Fallback model also failed: {e2}")
+                raise
     
     def describe_image(self, image_path, prompt="Describe what you see in this image.", max_tokens=150):
         """
-        Generate description for an image
+        Generate description for an image using PyTorch
         
         Args:
             image_path (str): Path to the image file
@@ -48,77 +84,80 @@ class SmolVLMInference:
             raise ValueError(f"Image file not found: {image_path}")
         
         # Load and process the image
-        image = Image.open(image_path)
+        image = Image.open(image_path).convert("RGB")
         print(f"Image loaded: {image.size}, mode: {image.mode}")
         
         try:
-            # Try different input formats for SmolVLM
+            # Format prompt for vision model
+            formatted_prompt = f"USER: <image>\n{prompt}\nASSISTANT:"
             
-            # Method 1: Use the standard format with image token
-            formatted_prompt = f"<image>\n{prompt}"
-            inputs = self.processor(text=formatted_prompt, images=[image], return_tensors="pt")
-            print("Method 1 successful: Using <image> token format")
-            
-        except Exception as e1:
-            print(f"Method 1 failed: {e1}")
-            try:
-                # Method 2: Try without image token
-                inputs = self.processor(text=prompt, images=[image], return_tensors="pt")
-                formatted_prompt = prompt
-                print("Method 2 successful: Using simple text format")
-                
-            except Exception as e2:
-                print(f"Method 2 failed: {e2}")
-                try:
-                    # Method 3: Try with different format
-                    inputs = self.processor(images=image, text=prompt, return_tensors="pt")
-                    formatted_prompt = prompt
-                    print("Method 3 successful: Using images-first format")
-                    
-                except Exception as e3:
-                    print(f"Method 3 failed: {e3}")
-                    raise ValueError(f"Failed to process inputs with all methods. Errors: {e1}, {e2}, {e3}")
-        
-        # print(f"Input keys: {list(inputs.keys())}")
-        for key, value in inputs.items():
-            if hasattr(value, 'shape'):
-                print(f"  {key}: {value.shape}")
-        
-        # Generate response with improved parameters
-        try:
-            outputs = self.model.generate(
-                **inputs,
-                max_new_tokens=max_tokens,
-                do_sample=True,
-                temperature=0.7,
-                top_p=0.9,
-                repetition_penalty=1.1,
-                pad_token_id=self.tokenizer.eos_token_id,
-                eos_token_id=self.tokenizer.eos_token_id
+            # Process inputs
+            inputs = self.processor(
+                text=formatted_prompt, 
+                images=image, 
+                return_tensors="pt"
             )
+            
+            # Move inputs to device
+            inputs = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
+            
+            print(f"Input keys: {list(inputs.keys())}")
+            for key, value in inputs.items():
+                if isinstance(value, torch.Tensor):
+                    print(f"  {key}: {value.shape} on {value.device}")
+            
         except Exception as e:
-            # Fallback generation
-            outputs = self.model.generate(
-                input_ids=inputs.input_ids,
-                pixel_values=inputs.pixel_values,
-                max_new_tokens=max_tokens,
-                do_sample=True,
-                temperature=0.7,
-                top_p=0.9,
-                repetition_penalty=1.1,
-                pad_token_id=self.tokenizer.eos_token_id,
-                eos_token_id=self.tokenizer.eos_token_id
-            )
+            print(f"Error processing inputs: {e}")
+            raise ValueError(f"Failed to process inputs: {e}")
+        
+        # Generate response
+        try:
+            with torch.no_grad():
+                outputs = self.model.generate(
+                    **inputs,
+                    max_new_tokens=max_tokens,
+                    do_sample=True,
+                    temperature=0.7,
+                    top_p=0.9,
+                    repetition_penalty=1.1,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                    eos_token_id=self.tokenizer.eos_token_id,
+                    use_cache=True
+                )
+                
+        except Exception as e:
+            print(f"Error during generation: {e}")
+            # Fallback generation with simpler parameters
+            try:
+                with torch.no_grad():
+                    outputs = self.model.generate(
+                        input_ids=inputs["input_ids"],
+                        pixel_values=inputs["pixel_values"] if "pixel_values" in inputs else inputs["images"],
+                        max_new_tokens=max_tokens,
+                        temperature=0.7,
+                        do_sample=True,
+                        pad_token_id=self.tokenizer.pad_token_id,
+                        eos_token_id=self.tokenizer.eos_token_id
+                    )
+            except Exception as e2:
+                print(f"Fallback generation also failed: {e2}")
+                raise ValueError(f"Generation failed: {e}, {e2}")
         
         # Decode the response
         response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
         
         # Clean up the response
         # Remove the input prompt if it appears in the response
-        for prompt_variant in [formatted_prompt, prompt, f"<image>\n{prompt}"]:
+        for prompt_variant in [formatted_prompt, prompt, f"USER: <image>\n{prompt}\nASSISTANT:"]:
             if prompt_variant in response:
                 response = response.replace(prompt_variant, "").strip()
                 break
+        
+        # Additional cleanup
+        if "ASSISTANT:" in response:
+            response = response.split("ASSISTANT:")[-1].strip()
+        if "USER:" in response:
+            response = response.split("USER:")[0].strip()
         
         # Clean up the response by removing repetitive patterns
         lines = response.split('.')
@@ -127,7 +166,7 @@ class SmolVLMInference:
         
         for line in lines:
             line = line.strip()
-            if line and line not in seen_lines and len(line) > 10:
+            if line and line not in seen_lines and len(line) > 5:
                 unique_lines.append(line)
                 seen_lines.add(line)
                 
