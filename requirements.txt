@@ -11,7 +11,8 @@ scikit-learn
 ultralytics
 numpy
 matplotlib
-paddlepaddle
+# Use paddlepaddle-gpu for GPU support, paddlepaddle for CPU only
+paddlepaddle-gpu  
 paddleocr
 transformers
 accelerate
