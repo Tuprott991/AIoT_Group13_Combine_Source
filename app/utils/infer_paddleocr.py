@@ -1,41 +1,85 @@
+"""
+PaddleOCR Inference Module for PyTorch Integration
+Handles OCR text detection and recognition with GPU/CPU detection
+"""
+
+# Import PyTorch first to avoid CUDA conflicts
+import torch
+
+# Import order fix for PyTorch-PaddlePaddle conflict
+try:
+    from .import_fix import get_safe_paddle_ocr
+    IMPORT_FIX_AVAILABLE = True
+except ImportError:
+    IMPORT_FIX_AVAILABLE = False
+
 import cv2
 import numpy as np
-import torch
 from PIL import Image
 import os
-from paddleocr import PaddleOCR
 import logging
 
+# Safe PaddleOCR import
+try:
+    from paddleocr import PaddleOCR
+    PADDLEOCR_AVAILABLE = True
+except ImportError as e:
+    print(f"PaddleOCR import failed: {e}")
+    PADDLEOCR_AVAILABLE = False
+
 # Suppress PaddleOCR logging
-logging.getLogger("ppocr").setLevel(logging.WARNING)
+import logging
+logging.getLogger("ppocr").setLevel(logging.ERROR)
+logging.getLogger("ppdet").setLevel(logging.ERROR)
+logging.getLogger("paddle").setLevel(logging.ERROR)
+
+# Set environment variables to reduce paddle logging
+os.environ['FLAGS_logtostderr'] = '0'
+os.environ['FLAGS_stderrthreshold'] = '3'
 
 class PaddleOCRInference:
     def __init__(self, use_gpu=None):
         """
-        Initialize PaddleOCR model
+        Initialize PaddleOCR model with conflict resolution
         
         Args:
-            use_gpu (bool): Whether to use GPU. If None, will auto-detect
+            use_gpu (bool): Whether to use GPU. Note: PaddleOCR may use CPU to avoid conflicts
         """
+        if not PADDLEOCR_AVAILABLE:
+            raise ImportError("PaddleOCR is not available. Please install paddleocr.")
+            
         if use_gpu is None:
             use_gpu = torch.cuda.is_available()
         
-        self.use_gpu = use_gpu
-        self.device = "cuda" if use_gpu and torch.cuda.is_available() else "cpu"
+        # For conflict resolution, prefer CPU for PaddleOCR
+        # This avoids PyTorch-PaddlePaddle CUDA conflicts
+        self.use_gpu = False  # Force CPU to avoid conflicts
+        self.device = 'cpu'
         
-        print(f"Initializing PaddleOCR with device: {self.device}")
+        print(f"Initializing PaddleOCR (CPU mode to avoid PyTorch conflicts)")
         
         try:
-            self.ocr = PaddleOCR(
-                use_angle_cls=True,
-                lang='en',  # Change to 'ch' for Chinese or other languages
-                use_gpu=self.use_gpu,
-                show_log=False
-            )
-            print("✅ PaddleOCR model loaded successfully!")
+            # Use import fix if available
+            if IMPORT_FIX_AVAILABLE:
+                self.ocr = get_safe_paddle_ocr()
+                if self.ocr is None:
+                    raise RuntimeError("PaddleOCR initialization failed via import fix")
+                print("✅ PaddleOCR initialized via import fix")
+            else:
+                # Safe basic initialization
+                self.ocr = PaddleOCR(
+                    use_angle_cls=True,
+                    lang='en'
+                )
+                print("✅ PaddleOCR initialized with basic settings")
+                
+            self.model_loaded = True
             
         except Exception as e:
             print(f"❌ Failed to load PaddleOCR: {e}")
+            print("💡 Run fix_pytorch_paddle_conflict.py to resolve conflicts")
+            self.ocr = None
+            self.model_loaded = False
             raise
     
     def extract_text(self, image):
