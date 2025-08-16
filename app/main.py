@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from endpoints import router as api_router
+from endpoints import unified_detection
 from model_loader import load_all_models, models_health_check
 import logging
 
@@ -10,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="AI Festival API",
-    description="API for hazard detection, sign detection, and image analysis",
+    description="API for hazard detection, sign detection, and image analysis with unified endpoint",
     version="1.0.0"
 )
 
@@ -44,7 +45,8 @@ async def model_health():
     return models_health_check()
 
 app.include_router(api_router, prefix="/api")
+app.include_router(unified_detection.router, prefix="/api/unified", tags=["unified"])
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000, reload=True)  
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)  

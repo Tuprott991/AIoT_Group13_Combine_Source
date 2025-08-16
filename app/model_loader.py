@@ -14,8 +14,8 @@ from utils.infer_paddleocr import PaddleOCRInference
 # Global variables to store loaded models
 _models: Dict[str, Any] = {}
 _model_paths = {
-    "yolo_sign_detection": "ai_models/yolov8_sign_detection/yolov8_traffic_sign.pt",
-    "yolic_hazard_detection": "ai_models/yolic_m2/yolic_m2.pth.tar",
+    "yolo_sign_detection": "../ai_models/yolov8_sign_detection/yolov8_traffic_sign.pt",
+    "yolic_hazard_detection": "../ai_models/yolic_m2/yolic_m2.pth.tar",
     "smolvlm": "HuggingFaceTB/SmolVLM-256M-Instruct"
 }
 
